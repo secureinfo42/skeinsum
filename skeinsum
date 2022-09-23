@@ -1,0 +1,220 @@
+#!/opt/local/bin/python3
+#coding: utf-8
+
+
+
+###################################################################################################
+#
+# Libs
+#
+##
+
+from getopt import getopt
+from base64 import b64encode as b64
+from os import popen
+
+from sys import argv, stdin, stdout, exit
+try:
+   from skein import skein256, skein512, skein1024
+except:
+  print("Error: 'pyskein' module not found.\nYou should : pip3 install pyskein\n")
+  print("       On arm64 architecture:")
+  print("       ARCHFLAGS='-arch arm64' pip install pyskein --compile --no-cache-dir pyskein")
+  exit(1)
+
+APP=argv[0].split("/")[-1]
+
+
+
+###################################################################################################
+#
+# Usage
+#
+##
+
+def usage(err):
+  msg ="""
+Usage:
+
+  %s [-a 224|256*|384|512] [-f hex|raw|b64] [-k hmac_key] [file]
+
+Exemples:
+
+  # Compute hash of file '/bin/ls'
+  %s /bin/ls
+
+  # Compute hash of stdin with the content of '/bin/ls'
+  cat /bin/ls|%s
+
+  # Compute hash of stdin (can use `heredoc`)
+  %s
+
+  # Compute hash of string, with sha3_512 and display digest as base64
+  printf 'myPasswordisVeryLongAndSecret'|%s -a 512 -f b64 -k 'P@ssw0rd'
+
+Note:
+
+  # SHA3 default algo is 256 (bits)
+
+  # To get raw data from digest:
+  printf "$(cat /bin/ls|%s -a 512 -f raw)"|xxd
+"""
+
+  print(msg % (APP,APP,APP,APP,APP,APP) )
+  exit(err)
+
+#--------------------------------------------------------------------------------------------------
+
+def file_exists(filename):
+  try:
+    open(filename,"rb").close()
+    return(True)
+  except:
+    return(False)
+
+#--------------------------------------------------------------------------------------------------
+
+def read_stdin():
+  ret = stdin.buffer.read()
+  return(ret)
+
+#--------------------------------------------------------------------------------------------------
+
+def error(txt,errcode=0):
+  msg = "%s: error: "+txt
+  print(msg % (APP))
+  if( errcode ):
+    exit(errcode)
+
+#--------------------------------------------------------------------------------------------------
+
+def compute_skein(input_data,hash_algo,nb_bits=256,hmac_key=b'',out_format="hex"):
+  try:
+    input_data = input_data.encode('utf-8')
+  except:
+    pass
+
+    skein1024(input_data, digest_bits=nb_bits)
+
+  hash_algo = int(hash_algo)
+  if( hash_algo == 1024 ):
+    ret = skein1024(input_data, digest_bits=nb_bits, key=hmac_key)
+  if( hash_algo == 512 ):
+    ret = skein512(input_data, digest_bits=nb_bits, key=hmac_key)
+  if( hash_algo == 256 ):
+    ret = skein256(input_data, digest_bits=nb_bits, key=hmac_key)
+
+  if( out_format == "hex" ):
+    ret = ret.hexdigest()
+  if( out_format == "b64" ):
+    ret = b64( ret.digest() )
+    ret = str(ret).split("'")[1]
+  if( out_format == "raw" ):
+    ret = ret.digest()
+    ret = str(ret).split("'")[1]
+
+  return( ret )
+
+
+
+###################################################################################################
+#
+# Argments parsing
+#
+##
+
+hash_algo  = "1024"
+nb_bits    = "1024"
+out_format = "hex"
+in_type    = "files"
+item       = ""
+hmac_key   = ""
+arg_index  = 1
+
+#--------------------------------------------------------------------------------------------------
+
+args = argv[1:]
+
+if( len(argv) >= 2 ):
+  if( argv[1] == "-h" ):
+    usage(0)
+
+#--------------------------------------------------------------------------------------------------
+
+o,a = "",""
+if( len(argv) >= 2 ):
+  for a in argv[1:]:
+    if( o == "-a" ):
+      hash_algo = a
+      arg_index += 2 # -a 512
+    if( o == "-f" ):
+      out_format = a
+      arg_index += 2 # -f b64
+    if( o == "-n" ):
+      nb_bits    = a
+      arg_index += 2 # -n 512
+    if( o == "-k" ):
+      hmac_key   = a
+      arg_index += 2 # -k passw0rd
+    o = a
+
+items = argv[arg_index:]
+if( len(items) == 0 ):
+  in_type = "stdin"
+
+
+
+
+###################################################################################################
+#
+# Operations
+#
+##
+
+#--- Checks ---------------------------------------------------------------------------------------
+
+if( hash_algo != "1024" and hash_algo != "512" and hash_algo != "256" ):
+  error("bad algorithm",2)
+
+#--- Checks ---------------------------------------------------------------------------------------
+
+if( nb_bits != "1024" and nb_bits != "512" and nb_bits != "384" and nb_bits != "256" ):
+  error("bad digest bits",2)
+
+#--- Format ---------------------------------------------------------------------------------------
+
+if( out_format != "hex" and out_format != "b64" and out_format != "raw" ):
+  error("bad format",2)
+
+
+#--- Input data -----------------------------------------------------------------------------------
+
+buffers = []
+src_in = "-"
+
+if( in_type == "files" ):
+  for item in items:
+    content = ""
+    errfile = False # OK
+    if( file_exists(item) ):
+      content = open(item,"rb").read()
+    else:
+      errfile = True
+    buffers.append( { "content":content , "input":item , "error":errfile } )
+
+elif( in_type == "stdin" ):
+  buffers.append( { "content":read_stdin() , "input":"-", "error":False } )
+
+else:
+  error("bad input type",1)
+
+
+#--- Output ---------------------------------------------------------------------------------------
+for buff in buffers:
+  if( buff["error"] == False ):
+    h = compute_skein(buff["content"],hash_algo,int(nb_bits),hmac_key.encode(),out_format)
+    print(h + "  " + buff["input"])
+
+for buff in buffers:
+  if( buff["error"] == True ):
+    error("unable to read file '"+buff["input"]+"'")
